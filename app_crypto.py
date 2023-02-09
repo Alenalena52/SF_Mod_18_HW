@@ -1,46 +1,44 @@
-import requests
-import json
-from config import keys
+import telebot
+from config import keys, TOKEN
+from extensions import ConvertionException, CryptoConverter, DeclensionByCases
 
-class ConvertionException(Exception):
-    pass
+bot = telebot.TeleBot(TOKEN)
 
-class CryptoConverter:
-    @staticmethod
-    def get_price(quote: str, base: str, amount: str):
-        if quote == base:
-            raise ConvertionException(f'Невозможно перевести одинаковые валюты {base}')
+@bot.message_handler(commands=['start', 'help'])
+def help(message: telebot.types.Message):
+    text = 'Чтобы начать работу введите команду боту в формате:\n <имя валюты> ' \
+           '<в какую валюту перевести> <количество переводимой валюты> \n' \
+            'Показать все доступные валюты /values'
+    bot.reply_to(message, text)
 
-        try:
-            quote_ticker = keys[quote]
-        except KeyError:
-            raise ConvertionException(f'Не удалось обработать валюту {quote}')
+@bot.message_handler(commands=['values'])
+def values(message: telebot.types.Message):
+    text = 'Доступные валюты:'
+    for key in keys.keys():
+        text = '\n'.join((text, key, ))
+    bot.reply_to(message, text)
 
-        try:
-            base_ticker = keys[base]
-        except KeyError:
-            raise ConvertionException(f'Не удалось обработать валюту {base}')
+@bot.message_handler(content_types=['text', ])
+def get_price(message: telebot.types.Message):
+    try:
+        values = message.text.split(' ')
 
-        try:
-            amount = float(amount)
-        except ValueError:
-            raise ConvertionException(f'Не удалось обработать количество {amount}.\nИспользуйте только цифры и при' \
-            'необходимости точку в качестве десятичного разделителя')
+        if len(values) != 3:
+            raise ConvertionException('Количество параметров не совпадает. Используйте формат:\n<имя валюты> ' \
+           '<в какую валюту перевести> <количество переводимой валюты> \n')
 
-        r = requests.get(f'https://min-api.cryptocompare.com/data/price?fsym={quote_ticker}&tsyms={base_ticker}')
-        total_base = amount * json.loads(r.content)[keys[base]]
+        quote, base, amount = values
+        total_base = CryptoConverter.get_price(quote, base, amount)
+    except ConvertionException as e:
+        bot.reply_to(message, f'Ошибка пользователя:\n{e}')
+    except Exception as e:
+        bot.reply_to(message, f'Не удалось обработать команду\n{e}')
+    else:
+        inclined_quote = DeclensionByCases(quote, float(amount))
+        inclined_base = DeclensionByCases(base, float(total_base))
+        quote = inclined_quote.incline()
+        base = inclined_base.incline()
+        text = f'{amount} {quote} = {total_base} {base}'
+        bot.send_message(message.chat.id, text)
 
-        return total_base
-
-class DeclensionByCases():
-    def __init__(self, word, num):
-        self.word = word
-        self.num = num
-
-    def incline(self):
-        if self.word != 'евро':
-            if (2 <= self.num % 10 <= 4 and self.num % 100 not in [12, 13, 14]) or not self.num.is_integer():
-                return 'рубля' if self.word == 'рубль' else self.word + 'a'
-            if (self.num % 10 == 0 or 5 <= self.num % 10 <= 9 or 11 <= self.num % 100 <= 14) and self.num.is_integer():
-                return 'рублей' if self.word == 'рубль' else self.word + 'ов'
-        return self.word
+bot.polling()
